@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted,watch } from 'vue'
 import * as THREE from 'three' //引入threejs
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js' //引入gltf加载器，threejs扩展库
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'//引入控制器，threejs扩展库
@@ -10,14 +10,22 @@ const loadingProgress = ref(0)
 const modelLoaded = ref(false)
 const autoRotate = ref(false)
 const wireframe = ref(false)
-
+const explodeValue = ref(0)
 let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let controls: OrbitControls | null = null
 let model: THREE.Group | null = null
 let animationId: number | null = null
-
+let center = new THREE.Vector3(0, 0, 0);        // 爆炸中心 (所有部件位置的平均值)
+// 部件列表: 每个部件包含 mesh, 原始位置(世界坐标), 径向单位方向
+const parts = ref([]);
+// --- 核心数据结构 ---
+  let explodeGroup = new THREE.Group();           // 用于容纳所有独立部件
+watch(explodeValue,(oldExplodeValue,newExplodeValue)=>{
+  console.log('爆炸系数',newExplodeValue)
+  updateExplode(newExplodeValue)
+})
 // 初始化场景
 const initScene = () => {
   if (!containerRef.value) return
@@ -67,7 +75,8 @@ const initScene = () => {
   // 添加坐标轴辅助线
   const axesHelper = new THREE.AxesHelper(3)
   scene.add(axesHelper)
-
+  
+  scene.add(explodeGroup);
   // 加载模型
   loadModel()
 
@@ -89,35 +98,109 @@ const loadModel = () => {
 
     (gltf) => {
       model = gltf.scene
-      gltf.scene.traverse((child) =>{
-        console.log('遍历场景',child)
-      })
-      // 计算模型边界并居中
-      const box = new THREE.Box3().setFromObject(model)
-      const center = box.getCenter(new THREE.Vector3())
-      const size = box.getSize(new THREE.Vector3())
-      
-      model.position.sub(center)
-      
-      // 根据模型大小调整相机位置
-      const maxDim = Math.max(size.x, size.y, size.z)
-      const distance = maxDim * 2
-      
-      if (camera) {
-        camera.position.set(distance, distance, distance)
-        camera.lookAt(0, 0, 0)
-      }
-      
-      // 启用阴影
-      model.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh
-          mesh.castShadow = true
-          mesh.receiveShadow = true
+      const meshes = []
+      model.traverse(child=>{
+        if(child.isMesh){
+          meshes.push(child)
         }
       })
+      if(meshes.length===0){
+        console.warn('模型中没有找到网络部件，无法实现爆炸效果')
+        return
+      }
+      console.log(`找到${meshes.length}个网格部件`)
+      //第2步，计算所有网格的世界位置，并临时存储，同时累加计算中心
+      const worldPositions = []
+      const tempPos = new THREE.Vector3()
+      const tempQuat = new THREE.Quaternion()
+      const tempScale = new THREE.Vector3();
+
+      meshes.forEach(mesh=>{
+        mesh.getWorldPosition(tempPos)
+        worldPositions.push(tempPos.clone())
+
+        center.add(tempPos)
+      })
+      center.divideScalar(meshes.length);
+      controls?.target.set(center.x,center.y,center.z)
+      camera?.lookAt(center.x,center.y,center.z);
+      //第3步，将每个网格从原父级移除，添加到explodeGroup，
+      // 并保持世界变幻不变
+      meshes.forEach((mesh,index)=>{
+        mesh.getWorldPosition(tempPos);
+        mesh.getWorldQuaternion(tempQuat)
+        mesh.getWorldScale(tempScale)
+        if(mesh.parent){
+          mesh.parent.remove(mesh)
+        }
+        explodeGroup.add(mesh)
+         // 恢复世界变换 (设置局部位置/旋转/缩放，因为父节点现在是 explodeGroup，且 explodeGroup 位于世界原点无变换)
+        // 这样 mesh 就保持原来的世界位置/旋转/缩放
+        mesh.position.copy(tempPos);
+        mesh.quaternion.copy(tempQuat);
+        mesh.scale.copy(tempScale);
+
+        // 确保网格能够投射和接收阴影
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        // 计算径向方向 (从中心指向部件原始位置)
+        const originalPos = tempPos.clone(); // 已经存储了
+        const dir = new THREE.Vector3().subVectors(originalPos, center).normalize();
+        
+        // 处理中心点上的特殊情况 (方向为零向量)
+        if (dir.length() < 0.001) {
+            dir.set(0, 1, 0); // 随意给一个向上方向，或者保持不动也可
+        }
+
+        // 存入 parts 列表
+        parts.value.push({
+            id:mesh.name,
+            name:mesh.name,
+            mesh: mesh,
+            originalPos: originalPos.clone(),
+            direction: dir,
+            offset:new THREE.Vector3(0,0,0),//个体偏移初始化为零
+        });
+
+         
+      })
+      // 初始化滑块值为0，确保模型位置不变
+      updateExplode(0);
+      // 停止自动旋转稍微等待用户交互，或者保持自动旋转
+      // 为了更好体验，当用户滑动滑块时暂停自动旋转，不过这里不强制
+        // 使用示例：将名为 "pCube511_BaseBoardM_0" 的部件设为红色，主版
+      //   GlassFront_GlassM_0玻璃
+      setPartColorByName('pCube1235_Case_BackplateM_0', 0x33FF33);
+
+      // gltf.scene.traverse((child) =>{
+      //   console.log('遍历场景',child)
+      // })
+      // // 计算模型边界并居中
+      // const box = new THREE.Box3().setFromObject(model)
+      // const center = box.getCenter(new THREE.Vector3())
+      // const size = box.getSize(new THREE.Vector3())
       
-      scene?.add(model)
+      // model.position.sub(center)
+      
+      // // 根据模型大小调整相机位置
+      // const maxDim = Math.max(size.x, size.y, size.z)
+      // const distance = maxDim * 2
+      
+      // if (camera) {
+      //   camera.position.set(distance, distance, distance)
+      //   camera.lookAt(0, 0, 0)
+      // }
+      
+      // // 启用阴影
+      // model.traverse((child) => {
+      //   if ((child as THREE.Mesh).isMesh) {
+      //     const mesh = child as THREE.Mesh
+      //     mesh.castShadow = true
+      //     mesh.receiveShadow = true
+      //   }
+      // })
+      
+      // scene?.add(model)
       loading.value = false
       modelLoaded.value = true
     },
@@ -132,7 +215,35 @@ const loadModel = () => {
     }
   )
 }
-
+const updateExplode=(factor)=>{
+  parts.value.forEach(item => {
+        // 新位置 = 原始位置 + 方向 * 因子 +偏移
+        // 注意: 方向是单位向量，因子控制距离
+        const globalOffset = item.direction.clone().multiplyScalar(factor);
+        const newPos = item.originalPos.clone()
+            .add(globalOffset)
+            .add(item.offset);
+        item.mesh.position.copy(newPos);
+    });
+    
+    // 更新滑块显示值
+    // valueSpan.textContent = factor.toFixed(2);
+}
+const setPartColorByName=(name,color)=>{
+  const part = parts.value.find(p => p.id === name);
+  if (!part) {
+      console.warn(`未找到名为 "${name}" 的部件`);
+      return;
+  }
+  console.log('part',part)
+  const colorObj = new THREE.Color(color);
+  const mesh = part.mesh;
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  materials.forEach(mat => {
+      mat.color.copy(colorObj);
+      console.log('mat',mat.color)
+  });
+}
 // 渲染循环
 const animate = () => {
   animationId = requestAnimationFrame(animate)
@@ -233,7 +344,6 @@ onUnmounted(() => {
         <p class="loading-text">加载模型中... {{ loadingProgress }}%</p>
       </div>
     </div>
-
     <!-- 控制面板 -->
     <div class="control-panel">
       <h3>3D 模型控制</h3>
@@ -265,6 +375,13 @@ onUnmounted(() => {
         </ul>
       </div>
     </div>
+    <!-- 爆炸因子 -->
+    <div id="controls">
+        <label for="explode">💥 爆炸因子</label>
+        <input v-model="explodeValue" type="range" id="explode" min="0" max="20" step="0.01" value="0.0">
+        <span id="value">{{ explodeValue }}</span>
+    </div>
+    <div id="note">✨ 模型部件自动提取，基于中心点径向爆炸 | 适用于多部件GLB</div>
   </div>
 </template>
 
@@ -398,4 +515,59 @@ onUnmounted(() => {
   font-size: 13px;
   margin-bottom: 8px;
 }
+
+     #controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30,30,40,0.85);
+            color: white;
+            padding: 20px 30px;
+            border-radius: 60px;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
+            display: flex;
+            gap: 25px;
+            align-items: center;
+            z-index: 20;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            pointer-events: all;
+        }
+        #controls label {
+            font-size: 16px;
+            font-weight: 400;
+            letter-spacing: 1px;
+            color: #ccc;
+        }
+        #controls input {
+            width: 350px;
+            cursor: pointer;
+            accent-color: #ff6b6b;
+            height: 8px;
+            border-radius: 10px;
+        }
+        #controls span {
+            font-size: 18px;
+            font-weight: 600;
+            min-width: 45px;
+            text-align: center;
+            color: #ffaa00;
+            background: rgba(0,0,0,0.4);
+            padding: 6px 12px;
+            border-radius: 40px;
+            font-family: monospace;
+        }
+        #note {
+            position: absolute;
+            bottom: 100px;
+            right: 20px;
+            background: rgba(0,0,0,0.5);
+            color: #aaa;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            z-index: 15;
+            border: 1px solid #444;
+        }
 </style>
