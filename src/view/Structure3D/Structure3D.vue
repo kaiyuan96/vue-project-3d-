@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
-import { ModeView } from './ModelView'
+import { ModeView, type PartInfo } from './ModelView'
 
 const containerRef = ref<HTMLDivElement | null>(null)
 const loading = ref(true)
@@ -9,8 +9,33 @@ const modelLoaded = ref(false)
 const autoRotate = ref(false)
 const wireframe = ref(false)
 const explodeValue = ref(0)
+const partsList = ref<{ id: string; name: string }[]>([])
+const activePartId = ref<string | null>(null)
+const explodedParts = ref<Set<string>>(new Set())
 
 let modeView: ModeView | null = null
+
+// 同步部件列表
+const syncPartsList = () => {
+  if (!modeView) return
+  const parts = modeView.getParts()
+  partsList.value = parts.map(p => ({ id: p.id, name: p.name }))
+}
+
+// 点击部件切换爆炸（沿固定方向系数1.8）
+const togglePartExplode = (partId: string) => {
+  activePartId.value = partId
+  if (modeView) {
+    const isExploded = modeView.toggleGroupExplode(partId, 1.2)
+    if (isExploded) {
+      explodedParts.value.add(partId)
+    } else {
+      explodedParts.value.delete(partId)
+    }
+    // 触发响应式更新
+    explodedParts.value = new Set(explodedParts.value)
+  }
+}
 
 // 监视爆炸值变化
 watch(explodeValue, (newValue) => {
@@ -26,9 +51,9 @@ const initScene = () => {
 
   // 创建 ModeView 实例
   modeView = new ModeView(containerRef.value, {
-    backgroundColor: 0x1a1a2e,
-    ambientLightIntensity: 0.6,
-    directionalLightIntensity: 1,
+    backgroundColor: 0x0108191,
+    ambientLightIntensity: 6.0,//环境光
+    directionalLightIntensity: 8.5,//方向光
     enableShadows: true,
     autoRotate: autoRotate.value
   })
@@ -41,6 +66,7 @@ const initScene = () => {
   modeView.setOnModelLoaded(() => {
     loading.value = false
     modelLoaded.value = true
+    syncPartsList()
   })
 
   modeView.setOnError((error) => {
@@ -52,7 +78,11 @@ const initScene = () => {
   modeView.init()
 
   // 加载模型
-  modeView.loadModel('/computerModel.glb')
+  // modeView.loadModel('/computerModel.glb')
+  // modeView.loadModel('/polyModel.glb')
+  modeView.loadModel('/jixiangmodel007.glb')
+
+
 }
 
 // 重置视角
@@ -148,6 +178,27 @@ onUnmounted(() => {
         </button>
       </div>
       
+      <!-- 爆炸分组列表 -->
+      <div class="parts-section" v-if="partsList.length > 0">
+        <h4>📦 卡板列表 ({{ partsList.length }})</h4>
+        <div class="parts-list">
+          <button
+            v-for="part in partsList"
+            :key="part.id"
+            @click="togglePartExplode(part.id)"
+            class="part-btn"
+            :class="{ 
+              active: activePartId === part.id,
+              exploded: explodedParts.has(part.id)
+            }"
+          >
+            <span class="part-icon">{{ explodedParts.has(part.id) ? '💥' : '🔘' }}</span>
+            <span class="part-name">{{ part.name }}</span>
+            <span class="part-status">{{ explodedParts.has(part.id) ? '已展开' : '' }}</span>
+          </button>
+        </div>
+      </div>
+
       <div class="info-section" v-if="modelLoaded">
         <h4>操作说明</h4>
         <ul>
@@ -160,10 +211,10 @@ onUnmounted(() => {
     <!-- 爆炸因子 -->
     <div id="controls">
         <label for="explode">💥 爆炸因子</label>
-        <input v-model="explodeValue" type="range" id="explode" min="0" max="20" step="0.01" value="0.0">
+        <input v-model="explodeValue" type="range" id="explode" min="0" max="2" step="0.01" value="0.0">
         <span id="value">{{ explodeValue }}</span>
     </div>
-    <div id="note">✨ 模型部件自动提取，基于中心点径向爆炸 | 适用于多部件GLB</div>
+    <div id="note">✨ 所有名称包含「group_board」的分组整体爆炸 | 其他部件保持不动</div>
   </div>
 </template>
 
@@ -272,6 +323,85 @@ onUnmounted(() => {
 
 .icon {
   font-size: 16px;
+}
+
+.parts-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 15px;
+}
+
+.parts-section h4 {
+  color: #fff;
+  margin: 0 0 12px 0;
+  font-size: 14px;
+}
+
+.parts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.parts-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.parts-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+}
+
+.part-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #ccc;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 13px;
+  text-align: left;
+}
+
+.part-btn:hover {
+  background: rgba(0, 255, 136, 0.15);
+  border-color: #00ff88;
+  color: #fff;
+}
+
+.part-btn.active {
+  background: rgba(0, 255, 136, 0.25);
+  border-color: #00ff88;
+  color: #00ff88;
+}
+
+.part-btn.exploded {
+  background: rgba(255, 107, 107, 0.25);
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+
+.part-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.part-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.part-status {
+  margin-left: auto;
+  font-size: 11px;
+  color: #ff6b6b;
+  flex-shrink: 0;
 }
 
 .info-section {
