@@ -115,7 +115,7 @@ export class ModeView {
         this.controls.autoRotate = this.autoRotate;
 
         // ========== 加载 HDR 环境贴图 ==========
-        this.loadHdrEnvironment('/relax_inn_seaview_suite_4k.hdr');
+        this.loadHdrEnvironment('/studio_small_01_4k.hdr');
 
         // ========== 灯光系统 ==========
         // 环境光（提供基础照明）
@@ -176,29 +176,29 @@ export class ModeView {
         // this.scene.add(gridHelper);
 
         // ========== 粒子星空 ==========
-        const starCount = 2000;
-        const starGeo = new THREE.BufferGeometry();
-        const starPos = new Float32Array(starCount * 3);
-        const starSizes = new Float32Array(starCount);
-        for (let i = 0; i < starCount; i++) {
-            starPos[i * 3] = (Math.random() - 0.5) * 80;
-            starPos[i * 3 + 1] = (Math.random() - 0.5) * 80;
-            starPos[i * 3 + 2] = (Math.random() - 0.5) * 80 - 20;
-            starSizes[i] = 0.3 + Math.random() * 0.8;
-        }
-        starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
-        starGeo.setAttribute('size', new THREE.BufferAttribute(starSizes, 1));
+        // const starCount = 2000;
+        // const starGeo = new THREE.BufferGeometry();
+        // const starPos = new Float32Array(starCount * 3);
+        // const starSizes = new Float32Array(starCount);
+        // for (let i = 0; i < starCount; i++) {
+        //     starPos[i * 3] = (Math.random() - 0.5) * 80;
+        //     starPos[i * 3 + 1] = (Math.random() - 0.5) * 80;
+        //     starPos[i * 3 + 2] = (Math.random() - 0.5) * 80 - 20;
+        //     starSizes[i] = 0.3 + Math.random() * 0.8;
+        // }
+        // starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        // starGeo.setAttribute('size', new THREE.BufferAttribute(starSizes, 1));
 
-        const starMat = new THREE.PointsMaterial({
-            color: 0x88ccff,
-            size: 0.08,
-            transparent: true,
-            opacity: 0.8,
-            blending: THREE.AdditiveBlending,
-            sizeAttenuation: true,
-        });
-        this.techParticles = new THREE.Points(starGeo, starMat);
-        this.scene!.add(this.techParticles);
+        // const starMat = new THREE.PointsMaterial({
+        //     color: 0x88ccff,
+        //     size: 0.08,
+        //     transparent: true,
+        //     opacity: 0.8,
+        //     blending: THREE.AdditiveBlending,
+        //     sizeAttenuation: true,
+        // });
+        // this.techParticles = new THREE.Points(starGeo, starMat);
+        // this.scene!.add(this.techParticles);
 
         // Explode group
         this.scene.add(this.explodeGroup);
@@ -228,11 +228,13 @@ export class ModeView {
 
                 const envMap = pmremGenerator.fromEquirectangular(texture).texture;
                 pmremGenerator.dispose();
-
-                // 设置场景的环境贴图（影响材质的反射/折射效果）
+           
+                // 1.设置场景的环境贴图（影响材质的反射/折射效果）
                 this.scene!.environment = envMap;
+                // 2. 作为背景（显示 HDR 图像）
+                this.scene!.background = envMap; 
                 // 保持深空蓝黑科技风背景
-                this.scene!.background = new THREE.Color(0x05080f);
+                // this.scene!.background = new THREE.Color(0x05080f);
                 // this.scene!.environment.intensity = 0.5;  // 关键！
                 console.log('✅ HDR 环境贴图加载成功:', hdrUrl);
             },
