@@ -209,11 +209,7 @@ onUnmounted(() => {
       </div>
     </div>
     <!-- 爆炸因子 -->
-    <div id="controls">
-        <label for="explode">💥 爆炸因子</label>
-        <input v-model="explodeValue" type="range" id="explode" min="0" max="2" step="0.01" value="0.0">
-        <span id="value">{{ explodeValue }}</span>
-    </div>
+  
     <div id="note">✨ 所有名称包含「group_board」的分组整体爆炸 | 其他部件保持不动</div>
   </div>
 </template>

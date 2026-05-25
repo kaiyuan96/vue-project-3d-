@@ -13,8 +13,10 @@ const switchBody = () => {
     <!-- <button @click="switchBody">切换内容</button> -->
     <RouterLink to="Structure3D">模型</RouterLink> |
     <!-- <RouterLink to="ImageTrajectory">图片轨迹渲染</RouterLink> | -->
-
-    <RouterView />
+    <div class="content">
+      <RouterView />
+    </div>
+    
 
   </div>
 </template>
@@ -23,5 +25,8 @@ const switchBody = () => {
 * {
   margin: 0;
   padding: 0;
+}
+.content{
+  height: calc(100% - 20px);
 }
 </style>

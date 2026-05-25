@@ -164,11 +164,11 @@ export class ModeView {
        
         // 板卡光辅助显示
         const boardLightHelper =  new THREE.PointLightHelper(boardLight, 0.5);
-        this.scene.add(boardLightHelper)
+        // this.scene.add(boardLightHelper)
         // ========== 辅助显示 ==========
         // 坐标轴辅助（红色X, 绿色Y, 蓝色Z），长度4
         const axesHelper = new THREE.AxesHelper(4);
-        this.scene.add(axesHelper);
+        // this.scene.add(axesHelper);
 
         // 地面网格辅助
         // const gridHelper = new THREE.GridHelper(10, 20, 0x4488ff, 0x3366aa);
