@@ -81,12 +81,14 @@ export class ModeView {
     private boardMeshList: { 
         partId: string; 
         mesh: THREE.Mesh; 
+        meshName: string;       // Mesh 名称，用于按名称过滤
         originalPos: THREE.Vector3;
         dirOffset: THREE.Vector3;  // 线条方向（YZ平面的偏移方向，单位向量*长度）
         dotOffset: THREE.Vector3;  // 圆点相对Mesh的偏移
         origColor: THREE.Color | null;  // 原始颜色（用于恢复）
         lineColor: THREE.Color | null;  // 线条颜色（爆炸时应用于物体）
         randomNum: number;  // 随机数，用于标签显示
+        labelSprite?: THREE.Sprite;  // 对应的文本标签 Sprite，用于实时更新
     }[] = [];
 
     public init(): void {
@@ -561,6 +563,7 @@ export class ModeView {
                 this.boardMeshList.push({
                     partId: part.id,
                     mesh: child,
+                    meshName: child.name || 'Unnamed',
                     originalPos: worldPos.clone(),
                     dirOffset: new THREE.Vector3(0, 1, 0),
                     dotOffset: new THREE.Vector3(0, 1, 0),
@@ -668,8 +671,8 @@ export class ModeView {
      */
     private createTextSprite(text: string, color: THREE.Color): THREE.Sprite {
         const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 64;
+        canvas.width = 512;
+        canvas.height =128;
         const ctx = canvas.getContext('2d')!;
         
         // 背景（半透明暗色圆角矩形）
@@ -720,8 +723,31 @@ export class ModeView {
     }
 
     /**
+     * 返回指定名称对应的模拟数值范围（用于生成更真实的标签数据）
+     */
+    private getMeasureValue(name: string): { value: number; unit: string } {
+        if (!name) return { value: Math.random() * 100, unit: '' };
+        if (name === '网络负载') return { value: Math.random() * 990 + 10, unit: ' Mbps' };
+        if (name === '功耗') return { value: Math.random() * 99 + 1, unit: ' W' };
+        if (name === '核心温度') return { value: Math.random() * 75 + 25, unit: ' °C' };
+        if (name === '电流') return { value: Math.random() * 1.4 + 0.1, unit: ' A' };
+        if (name === '内存负载') return { value: Math.random() * 98 + 1, unit: ' %' };
+        if (name === '光功率') return { value: Math.random() * 33 - 30, unit: ' dBm' };
+        if (name === 'cpu负载') return { value: Math.random() * 98 + 1, unit: ' %' };
+        return { value: Math.random() * 100, unit: '' };
+    }
+
+    /**
+     * 判断 Mesh 名称是否匹配感兴趣的关键字（cpu负载、网络负载、内存负载、电流、功耗、核心温度、光功率）
+     */
+    private isInterestName(meshName: string): boolean {
+        const interestNames = ['cpu负载', '网络负载', '内存负载', '电流', '功耗', '核心温度', '光功率'];
+        return interestNames.some(name => meshName.includes(name));
+    }
+
+    /**
      * 为所有板卡创建独立线条组（每个 partId 一个 Group，包含折线+圆点+标签）
-     * 每块板卡最多创建 10 条折线
+     * 只对名称包含感兴趣关键字的 Mesh 创建线条和标签
      */
     private createBoardRadiatingLines(): void {
         if (!this.scene) return;
@@ -741,7 +767,8 @@ export class ModeView {
         let totalLines = 0;
 
         for (const partId of partIds) {
-            const partItems = this.boardMeshList.filter(item => item.partId === partId).slice(0, 10);
+            // 只对名称包含感兴趣关键字的 Mesh 创建线条和标签
+            const partItems = this.boardMeshList.filter(item => item.partId === partId && this.isInterestName(item.meshName));
             if (partItems.length === 0) continue;
 
             const partCenter = partMap.get(partId) || new THREE.Vector3(0, 0, 0);
@@ -792,13 +819,16 @@ export class ModeView {
                 const dot = new THREE.Mesh(dotGeo, dotMat);
                 dot.position.copy(labelPos);
                 dot.name = `radiate_dot_${item.partId}_${localIndex}`;
-                pg.add(dot);
+                // pg.add(dot);
 
-                const labelText = `${item.mesh.name || 'Mesh'} ${item.randomNum}`;
+                const { value, unit } = this.getMeasureValue(item.mesh.name);
+                const labelText = `${item.mesh.name || 'Mesh'}: ${value.toFixed(2)}${unit}`;
                 const label = this.createTextSprite(labelText, color);
                 label.position.copy(labelPos);
                 label.name = `radiate_label_${item.partId}_${localIndex}`;
                 pg.add(label);
+                // 保存 Sprite 引用，用于实时更新
+                item.labelSprite = label;
             });
 
             pg.visible = false;
@@ -1067,10 +1097,10 @@ export class ModeView {
     }
 
     /**
-     * 获取指定板卡的前 N 个 Mesh（每个板卡独立获取，互不干扰）
+     * 获取指定板卡中名称匹配感兴趣关键字的 Mesh（每个板卡独立获取，互不干扰）
      */
-    private getPartMeshes(partId: string, maxCount: number = 10): typeof this.boardMeshList {
-        return this.boardMeshList.filter(item => item.partId === partId).slice(0, maxCount);
+    private getPartMeshes(partId: string): typeof this.boardMeshList {
+        return this.boardMeshList.filter(item => item.partId === partId && this.isInterestName(item.meshName));
     }
 
     /**

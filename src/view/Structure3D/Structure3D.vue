@@ -80,7 +80,7 @@ const initScene = () => {
   // 加载模型
   // modeView.loadModel('/computerModel.glb')
   // modeView.loadModel('/polyModel.glb')
-  modeView.loadModel('/jixiangmodel007.glb')
+  modeView.loadModel('/jixiangmodel008.glb')
 
 
 }
