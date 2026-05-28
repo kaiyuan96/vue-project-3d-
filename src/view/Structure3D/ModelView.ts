@@ -44,6 +44,8 @@ export class ModeView {
     private explodeValue: number = 0;
     private activeAnimPartId: string | null = null; // 当前正在展开动画的部件ID
     private expandedPartIds: Set<string> = new Set(); // 已展开显示线条的板卡ID集合
+    // 记录哪些板卡使用了随机传感器（无关键词匹配时）
+    private virtualSensorPartIds: Set<string> = new Set();
     // 记录哪些板卡在展开动画完成后需要显示线条（延迟显示）
     private pendingLinesShow: Set<string> = new Set();
     // 每个板卡线条组的淡入动画开始时间（-1 表示非淡入状态）
@@ -56,6 +58,14 @@ export class ModeView {
     private modelLoaded: boolean = false;
     private autoRotate: boolean = false;
     private wireframe: boolean = false;
+
+    // HDR 环境贴图相关
+    private currentHdrUrl: string = '';
+    private currentEnvMap: THREE.Texture | null = null;
+    private currentHdrTexture: THREE.DataTexture | null = null;
+
+    // 标签数值实时更新
+    private labelUpdateInterval: number | null = null;
 
     private onLoadingProgress?: (progress: number) => void;
     private onModelLoaded?: () => void;
@@ -89,6 +99,7 @@ export class ModeView {
         lineColor: THREE.Color | null;  // 线条颜色（爆炸时应用于物体）
         randomNum: number;  // 随机数，用于标签显示
         labelSprite?: THREE.Sprite;  // 对应的文本标签 Sprite，用于实时更新
+        _virtualSensorName?: string;  // 虚拟传感器分配的名称（无关键词匹配时使用）
     }[] = [];
 
     public init(): void {
@@ -117,7 +128,8 @@ export class ModeView {
         this.controls.autoRotate = this.autoRotate;
 
         // ========== 加载 HDR 环境贴图 ==========
-        this.loadHdrEnvironment('/studio_small_01_4k.hdr');
+        this.currentHdrUrl = '/studio_small_01_4k.hdr';
+        this.loadHdrEnvironment(this.currentHdrUrl);
 
         // ========== 灯光系统 ==========
         // 环境光（提供基础照明）
@@ -228,16 +240,26 @@ export class ModeView {
                 const pmremGenerator = new THREE.PMREMGenerator(this.renderer!);
                 pmremGenerator.compileEquirectangularShader();
 
+                // 清理之前的环境贴图纹理
+                if (this.currentEnvMap) {
+                    this.currentEnvMap.dispose();
+                }
+                if (this.currentHdrTexture) {
+                    this.currentHdrTexture.dispose();
+                }
+
                 const envMap = pmremGenerator.fromEquirectangular(texture).texture;
                 pmremGenerator.dispose();
+
+                // 保存引用以便后续清理
+                this.currentEnvMap = envMap;
+                this.currentHdrTexture = texture;
            
-                // 1.设置场景的环境贴图（影响材质的反射/折射效果）
+                // 设置场景的环境贴图（影响材质的反射/折射效果）
                 this.scene!.environment = envMap;
-                // 2. 作为背景（显示 HDR 图像）
-                this.scene!.background = envMap; 
-                // 保持深空蓝黑科技风背景
-                // this.scene!.background = new THREE.Color(0x05080f);
-                // this.scene!.environment.intensity = 0.5;  // 关键！
+                // 作为背景（显示 HDR 图像）
+                this.scene!.background = envMap;
+
                 console.log('✅ HDR 环境贴图加载成功:', hdrUrl);
             },
             (progress) => {
@@ -253,6 +275,33 @@ export class ModeView {
                 console.log('✅ 使用备用 RoomEnvironment 环境贴图');
             }
         );
+    }
+
+    /**
+     * 动态切换 HDR 环境贴图
+     * @param hdrUrl HDR 文件路径，例如 '/studio_small_01_4k.hdr'
+     */
+    public switchHdrEnvironment(hdrUrl: string): void {
+        if (!this.scene || !this.renderer) {
+            console.warn('Scene not initialized. Cannot switch HDR.');
+            return;
+        }
+
+        if (hdrUrl === this.currentHdrUrl) {
+            console.log('HDR already set to:', hdrUrl);
+            return;
+        }
+
+        console.log('🔄 切换 HDR 环境贴图:', hdrUrl);
+        this.currentHdrUrl = hdrUrl;
+        this.loadHdrEnvironment(hdrUrl);
+    }
+
+    /**
+     * 获取当前 HDR 环境贴图 URL
+     */
+    public getCurrentHdrUrl(): string {
+        return this.currentHdrUrl;
     }
 
     public loadModel(url: string): void {
@@ -485,6 +534,17 @@ export class ModeView {
         });
     }
 
+    /**
+     * 克隆 Mesh 的所有材质，确保每个 Mesh 拥有独立材质实例，避免共享材质导致一改全改
+     */
+    private ensureUniqueMaterial(mesh: THREE.Mesh): void {
+        if (Array.isArray(mesh.material)) {
+            mesh.material = mesh.material.map(mat => mat.clone());
+        } else {
+            mesh.material = mesh.material.clone();
+        }
+    }
+
    
 
     public resetView(): void {
@@ -538,10 +598,13 @@ export class ModeView {
         if (this.animationId) {
             cancelAnimationFrame(this.animationId);
         }
+        this.stopLabelUpdates();
         window.removeEventListener('resize', this.handleResize.bind(this));
         this.renderer?.dispose();
         this.scene?.clear();
-        this.container.removeChild(this.renderer!.domElement);
+        if (this.renderer && this.renderer.domElement.parentElement === this.container) {
+            this.container.removeChild(this.renderer.domElement);
+        }
     }
 
     /** 动画时长（毫秒） */
@@ -558,6 +621,9 @@ export class ModeView {
                 const worldPos = new THREE.Vector3();
                 child.getWorldPosition(worldPos);
                 
+                // 克隆材质，确保每个 Mesh 独立材质实例，避免共享材质导致一改全改
+                this.ensureUniqueMaterial(child);
+
                 // 暂时先收集，方向在 createBoardRadiatingLines 时再计算
                 // 这里只存原始位置，dirOffset/dotOffset 先赋默认值
                 this.boardMeshList.push({
@@ -740,14 +806,21 @@ export class ModeView {
     /**
      * 判断 Mesh 名称是否匹配感兴趣的关键字（cpu负载、网络负载、内存负载、电流、功耗、核心温度、光功率）
      */
+    /**
+     * 虚拟传感器名称池（用于板卡内无关键词匹配时随机分配）
+     */
+    private readonly virtualSensorNames = ['cpu负载', '网络负载', '内存负载', '电流', '功耗', '核心温度', '光功率'];
+    /** 每个虚拟传感器独立随机种子，避免同一板卡内出现重复名称 */
+    private virtualSensorUsedNames: Map<string, Set<string>> = new Map();
+
     private isInterestName(meshName: string): boolean {
-        const interestNames = ['cpu负载', '网络负载', '内存负载', '电流', '功耗', '核心温度', '光功率'];
-        return interestNames.some(name => meshName.includes(name));
+        return this.virtualSensorNames.some(name => meshName.includes(name));
     }
 
     /**
      * 为所有板卡创建独立线条组（每个 partId 一个 Group，包含折线+圆点+标签）
-     * 只对名称包含感兴趣关键字的 Mesh 创建线条和标签
+     * 优先匹配名称包含感兴趣关键字的 Mesh，若某板卡没有匹配的 Mesh，
+     * 则随机选择最多 7 个 Mesh 作为虚拟传感器显示发散线和标签
      */
     private createBoardRadiatingLines(): void {
         if (!this.scene) return;
@@ -757,6 +830,8 @@ export class ModeView {
             this.scene!.remove(group);
         }
         this.partLinesGroups.clear();
+        this.virtualSensorPartIds.clear();
+        this.virtualSensorUsedNames.clear();
 
         const partMap = new Map<string, THREE.Vector3>();
         for (const p of this.parts) {
@@ -767,8 +842,39 @@ export class ModeView {
         let totalLines = 0;
 
         for (const partId of partIds) {
-            // 只对名称包含感兴趣关键字的 Mesh 创建线条和标签
-            const partItems = this.boardMeshList.filter(item => item.partId === partId && this.isInterestName(item.meshName));
+            // 先尝试找名称包含关键字的 Mesh
+            let partItems = this.boardMeshList.filter(item => item.partId === partId && this.isInterestName(item.meshName));
+            let isVirtual = false;
+
+            // 如果没有任何匹配关键字的 Mesh，随机选最多 7 个作为虚拟传感器
+            if (partItems.length === 0) {
+                isVirtual = true;
+                const allMeshes = this.boardMeshList.filter(item => item.partId === partId);
+                // 随机打乱后取前7个（或全部，如果少于7个）
+                const shuffled = [...allMeshes].sort(() => Math.random() - 0.5);
+                partItems = shuffled.slice(0, Math.min(7, shuffled.length));
+                // 标记这些 Mesh 为虚拟传感器，并分配随机传感器名称
+                const usedNames = new Set<string>();
+                partItems.forEach((item, idx) => {
+                    // 每个虚拟传感器分配不同的名称（轮流从名称池取）
+                    const nameIdx = idx % this.virtualSensorNames.length;
+                    const sensorName = this.virtualSensorNames[nameIdx];
+                    // 如果名称在当前板卡已被使用，遍历找没被用的
+                    let finalName = sensorName;
+                    let attempt = 0;
+                    while (usedNames.has(finalName) && attempt < this.virtualSensorNames.length * 2) {
+                        const ni = (nameIdx + attempt + 1) % this.virtualSensorNames.length;
+                        finalName = this.virtualSensorNames[ni];
+                        attempt++;
+                    }
+                    usedNames.add(finalName);
+                    // 临时修改 meshName 为传感器名称（用于 getMeasureValue 识别）
+                    (item as any)._virtualSensorName = finalName;
+                });
+                this.virtualSensorUsedNames.set(partId, usedNames);
+                this.virtualSensorPartIds.add(partId);
+            }
+
             if (partItems.length === 0) continue;
 
             const partCenter = partMap.get(partId) || new THREE.Vector3(0, 0, 0);
@@ -810,19 +916,16 @@ export class ModeView {
                     }
                 }
 
-                const dotGeo = new THREE.SphereGeometry(0.04, 6, 6);
-                const dotMat = new THREE.MeshBasicMaterial({
-                    color: color,
-                    transparent: true,
-                    opacity: 0.9,
-                });
-                const dot = new THREE.Mesh(dotGeo, dotMat);
-                dot.position.copy(labelPos);
-                dot.name = `radiate_dot_${item.partId}_${localIndex}`;
-                // pg.add(dot);
-
-                const { value, unit } = this.getMeasureValue(item.mesh.name);
-                const labelText = `${item.mesh.name || 'Mesh'}: ${value.toFixed(2)}${unit}`;
+                // 获取标签文字：虚拟传感器使用分配的传感器名称
+                let labelText: string;
+                if (isVirtual) {
+                    const sensorName = item._virtualSensorName || '传感器';
+                    const { value, unit } = this.getMeasureValue(sensorName);
+                    labelText = `${sensorName}: ${value.toFixed(2)}${unit}`;
+                } else {
+                    const { value, unit } = this.getMeasureValue(item.mesh.name);
+                    labelText = `${item.mesh.name || 'Mesh'}: ${value.toFixed(2)}${unit}`;
+                }
                 const label = this.createTextSprite(labelText, color);
                 label.position.copy(labelPos);
                 label.name = `radiate_label_${item.partId}_${localIndex}`;
@@ -854,6 +957,7 @@ export class ModeView {
         const finalGroupPos = part.mesh.position.clone();
 
         const partItems = this.getPartMeshes(partId);
+        console.log('拥有发散线的物体',partItems)
         if (partItems.length === 0) return;
 
         // 计算子 Mesh 相对于板卡分组的偏移位置
@@ -1100,7 +1204,14 @@ export class ModeView {
      * 获取指定板卡中名称匹配感兴趣关键字的 Mesh（每个板卡独立获取，互不干扰）
      */
     private getPartMeshes(partId: string): typeof this.boardMeshList {
-        return this.boardMeshList.filter(item => item.partId === partId && this.isInterestName(item.meshName));
+        return this.boardMeshList.filter(item => {
+            if (item.partId !== partId) return false;
+            // 匹配包含关键字的 Mesh
+            if (this.isInterestName(item.meshName)) return true;
+            // 也匹配分配了虚拟传感器名称的 Mesh
+            if (item._virtualSensorName) return true;
+            return false;
+        });
     }
 
     /**
@@ -1128,6 +1239,80 @@ export class ModeView {
         if (part) {
             this.removeDashedLine(part);
         }
+
+        // 如果没有板卡展开，停止标签更新
+        if (this.expandedPartIds.size === 0) {
+            this.stopLabelUpdates();
+        }
+    }
+
+    /**
+     * 实时更新所有展开板卡的标签数值（每秒更新一次）
+     * 数值在合理范围内平滑变化，模拟真实传感器数据
+     */
+    private startLabelUpdates(): void {
+        if (this.labelUpdateInterval !== null) return; // 已启动
+        console.log('🔄 启动标签数值实时更新');
+        this.labelUpdateInterval = window.setInterval(() => {
+            // 遍历所有展开的板卡
+            for (const partId of this.expandedPartIds) {
+                const partItems = this.getPartMeshes(partId);
+                partItems.forEach(item => {
+                    if (!item.labelSprite) return;
+                    // 生成新的随机数值（在合理范围内模拟微小波动）
+                    // 虚拟传感器使用分配的传感器名称，否则使用原始 meshName
+                    const name = item._virtualSensorName || item.meshName;
+                    const { value, unit } = this.getMeasureValue(name);
+                    const labelText = `${name}: ${value.toFixed(2)}${unit}`;
+                    // 更新 Sprite 纹理
+                    this.updateTextSprite(item.labelSprite, labelText, item.lineColor || new THREE.Color(0xffffff));
+                });
+            }
+        }, 1000); // 每秒更新一次
+    }
+
+    /**
+     * 停止标签数值更新
+     */
+    private stopLabelUpdates(): void {
+        if (this.labelUpdateInterval !== null) {
+            window.clearInterval(this.labelUpdateInterval);
+            this.labelUpdateInterval = null;
+            console.log('🔄 停止标签数值更新');
+        }
+    }
+
+    /**
+     * 更新已有 Sprite 的文本内容（复用 Canvas 纹理，避免反复创建新纹理）
+     */
+    private updateTextSprite(sprite: THREE.Sprite, text: string, color: THREE.Color): void {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d')!;
+        
+        // 背景
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.beginPath();
+        ctx.roundRect(4, 4, 248, 56, 8);
+        ctx.fill();
+        
+        // 文字
+        ctx.font = 'bold 24px "Microsoft YaHei", Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgb(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)})`;
+        ctx.fillText(text, 128, 32);
+        
+        // 更新纹理
+        const mat = sprite.material as THREE.SpriteMaterial;
+        if (mat.map) {
+            mat.map.dispose();
+        }
+        const newTexture = new THREE.CanvasTexture(canvas);
+        newTexture.needsUpdate = true;
+        mat.map = newTexture;
+        mat.needsUpdate = true;
     }
 
     /**
@@ -1183,6 +1368,9 @@ export class ModeView {
 
         // 记录淡入开始时间
         this.fadeInStartTimes.set(partId, performance.now());
+
+        // 启动标签实时更新（只要有板卡展开就启动定时器）
+        this.startLabelUpdates();
     }
 
     /**

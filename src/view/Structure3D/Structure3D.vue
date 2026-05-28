@@ -13,6 +13,15 @@ const partsList = ref<{ id: string; name: string }[]>([])
 const activePartId = ref<string | null>(null)
 const explodedParts = ref<Set<string>>(new Set())
 
+// HDR 环境贴图选项
+const hdrOptions = [
+  { label: '工作室(小)', value: '/studio_small_01_4k.hdr' },
+  { label: '摄影棚(棕)', value: '/brown_photostudio_02_4k.hdr' },
+  { label: '海景套房', value: '/relax_inn_seaview_suite_4k.hdr' },
+]
+const currentHdr = ref(hdrOptions[0].value)
+const switchingHdr = ref(false)
+
 let modeView: ModeView | null = null
 
 // 同步部件列表
@@ -129,6 +138,20 @@ const toggleFullscreen = () => {
   }
 }
 
+// 切换 HDR 环境贴图
+const switchHdr = (hdrUrl: string) => {
+  if (!modeView || !modelLoaded.value) return
+  if (hdrUrl === currentHdr.value) return
+  
+  currentHdr.value = hdrUrl
+  switchingHdr.value = true
+  modeView.switchHdrEnvironment(hdrUrl)
+  // 给 HDR 加载一点缓冲时间，然后关闭加载提示
+  setTimeout(() => {
+    switchingHdr.value = false
+  }, 1500)
+}
+
 // 设置部件颜色
 const setPartColorByName = (name: string, color: number) => {
   if (modeView) {
@@ -178,6 +201,25 @@ onUnmounted(() => {
         </button>
       </div>
       
+      <!-- HDR 环境贴图切换 -->
+      <div class="parts-section">
+        <h4>🌄 环境背景</h4>
+        <div class="hdr-list">
+          <button
+            v-for="hdr in hdrOptions"
+            :key="hdr.value"
+            @click="switchHdr(hdr.value)"
+            :disabled="!modelLoaded || switchingHdr"
+            class="hdr-btn"
+            :class="{ active: currentHdr === hdr.value }"
+          >
+            <span class="hdr-indicator" :class="{ active: currentHdr === hdr.value }"></span>
+            <span class="hdr-label">{{ hdr.label }}</span>
+            <span v-if="switchingHdr && currentHdr === hdr.value" class="hdr-loading">加载中...</span>
+          </button>
+        </div>
+      </div>
+
       <!-- 爆炸分组列表 -->
       <div class="parts-section" v-if="partsList.length > 0">
         <h4>📦 卡板列表 ({{ partsList.length }})</h4>
@@ -352,6 +394,77 @@ onUnmounted(() => {
 .parts-list::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 2px;
+}
+
+.hdr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hdr-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #ccc;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 13px;
+  text-align: left;
+}
+
+.hdr-btn:hover:not(:disabled) {
+  background: rgba(0, 200, 255, 0.15);
+  border-color: #00c8ff;
+  color: #fff;
+}
+
+.hdr-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hdr-btn.active {
+  background: rgba(0, 200, 255, 0.25);
+  border-color: #00c8ff;
+  color: #00c8ff;
+}
+
+.hdr-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.hdr-indicator.active {
+  background: #00c8ff;
+  box-shadow: 0 0 8px rgba(0, 200, 255, 0.6);
+}
+
+.hdr-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hdr-loading {
+  margin-left: auto;
+  font-size: 11px;
+  color: #ffaa00;
+  animation: pulse 0.8s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .part-btn {
