@@ -19,6 +19,14 @@ export interface PartInfo {
     dashedLine?: THREE.Line;
 }
 
+export interface PartInfoData {
+    partId: string;
+    partName: string;
+    sensors: { name: string; value: string; unit: string }[];
+    screenX: number;
+    screenY: number;
+}
+
 export interface ModeViewOptions {
     backgroundColor?: number;
     ambientLightIntensity?: number;
@@ -66,6 +74,18 @@ export class ModeView {
 
     // 标签数值实时更新
     private labelUpdateInterval: number | null = null;
+
+    // 板卡高亮相关
+    private highlightedPartId: string | null = null;  // 当前高亮的板卡ID
+    // 信息面板回调：通知 Vue 更新面板位置和数据
+    public onPartInfoUpdate: ((data: PartInfoData | null) => void) | null = null;
+
+    // Mesh 点击交互（Raycaster）
+    private raycaster: THREE.Raycaster = new THREE.Raycaster();
+    private mouse: THREE.Vector2 = new THREE.Vector2();
+    private highlightedMesh: THREE.Mesh | null = null;  // 当前高亮的子Mesh
+    private highlightedMeshOrigEmissive: { mat: THREE.MeshStandardMaterial; emissive: THREE.Color; intensity: number }[] = [];
+    public onMeshClick: ((data: { meshName: string; mesh: THREE.Mesh; partId: string; screenX: number; screenY: number } | null) => void) | null = null;
 
     private onLoadingProgress?: (progress: number) => void;
     private onModelLoaded?: () => void;
@@ -222,6 +242,131 @@ export class ModeView {
 
         // Resize listener
         window.addEventListener('resize', this.handleResize.bind(this));
+        
+        // 鼠标点击事件（Raycaster 拾取 Mesh）
+        this.renderer.domElement.addEventListener('click', this.handleMeshClick.bind(this));
+    }
+
+    /**
+     * 3D 场景内 Mesh 点击处理：仅对已展开板卡内部的 Mesh 生效，
+     * 点击后高亮该 Mesh 并触发回调通知 Vue 显示小信息面板
+     */
+    private handleMeshClick(event: MouseEvent): void {
+        if (!this.camera || !this.scene || this.expandedPartIds.size === 0) {
+            // 没有任何板卡展开时忽略点击
+            if (this.onMeshClick) this.onMeshClick(null);
+            return;
+        }
+
+        const rect = this.renderer!.domElement.getBoundingClientRect();
+        this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        this.raycaster.setFromCamera(this.mouse, this.camera);
+
+        // 收集所有已展开板卡内部的所有 Mesh
+        const targetMeshes: THREE.Mesh[] = [];
+        for (const partId of this.expandedPartIds) {
+            const part = this.parts.find(p => p.id === partId);
+            if (part) {
+                part.mesh.traverse(child => {
+                    if (child instanceof THREE.Mesh) {
+                        targetMeshes.push(child);
+                    }
+                });
+            }
+        }
+
+        if (targetMeshes.length === 0) return;
+
+        const intersects = this.raycaster.intersectObjects(targetMeshes, false);
+        console.log('点击',intersects)
+        if (intersects.length > 0) {
+            const hit = intersects[0].object as THREE.Mesh;
+            if(hit.name.includes('低模') || hit.name.includes('后背小面板')){
+                // 这两个物体相当于点击空白处
+                 // 点击空白处清除高亮
+                this.clearMeshHighlight();
+                if (this.onMeshClick) this.onMeshClick(null);
+                return
+            }
+            // 找到这个 Mesh 所属的板卡
+            let hitPartId: string | null = null;
+            for (const partId of this.expandedPartIds) {
+                const part = this.parts.find(p => p.id === partId);
+                if (part) {
+                    let found = false;
+                    part.mesh.traverse(child => {
+                        if (child === hit) found = true;
+                    });
+                    if (found) { hitPartId = partId; break; }
+                }
+            }
+            console.log('点击物体名字',hit.name)
+            if (!hitPartId) return;
+
+            // 高亮点击的 Mesh
+            this.clearMeshHighlight();
+            this.highlightSingleMesh(hit);
+
+            // 计算屏幕投影位置
+            const worldPos = new THREE.Vector3();
+            hit.getWorldPosition(worldPos);
+            worldPos.project(this.camera);
+            const w = this.renderer!.domElement.clientWidth;
+            const h = this.renderer!.domElement.clientHeight;
+            const sx = (worldPos.x * 0.5 + 0.5) * w;
+            const sy = (-worldPos.y * 0.5 + 0.5) * h;
+
+            // 通知 Vue
+            if (this.onMeshClick) {
+                this.onMeshClick({
+                    meshName: hit.name || '未命名物体',
+                    mesh: hit,
+                    partId: hitPartId,
+                    screenX: sx,
+                    screenY: sy,
+                });
+            }
+        } else {
+            // 点击空白处清除高亮
+            this.clearMeshHighlight();
+            if (this.onMeshClick) this.onMeshClick(null);
+        }
+    }
+
+    /**
+     * 高亮单个 Mesh（设置 emissive 黄色发光）
+     */
+    private highlightSingleMesh(mesh: THREE.Mesh): void {
+        this.highlightedMesh = mesh;
+        this.highlightedMeshOrigEmissive = [];
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        mats.forEach(mat => {
+            if (mat instanceof THREE.MeshStandardMaterial) {
+                this.highlightedMeshOrigEmissive.push({
+                    mat,
+                    emissive: mat.emissive.clone(),
+                    intensity: mat.emissiveIntensity,
+                });
+                mat.emissive = new THREE.Color(0xffaa00);
+                mat.emissiveIntensity = 0.5;
+            }
+        });
+    }
+
+    /**
+     * 清除单个 Mesh 的高亮
+     */
+    private clearMeshHighlight(): void {
+        if (this.highlightedMesh) {
+            this.highlightedMeshOrigEmissive.forEach(item => {
+                item.mat.emissive.copy(item.emissive);
+                item.mat.emissiveIntensity = item.intensity;
+            });
+            this.highlightedMeshOrigEmissive = [];
+            this.highlightedMesh = null;
+        }
     }
 
     /**
@@ -919,9 +1064,9 @@ export class ModeView {
                 // 获取标签文字：虚拟传感器使用分配的传感器名称
                 let labelText: string;
                 if (isVirtual) {
-                    const sensorName = item._virtualSensorName || '传感器';
-                    const { value, unit } = this.getMeasureValue(sensorName);
-                    labelText = `${sensorName}: ${value.toFixed(2)}${unit}`;
+                    const sensorName = item._virtualSensorName ?? '传感器';
+                    const { value: v1, unit: u1 } = this.getMeasureValue(sensorName);
+                    labelText = `${sensorName}: ${v1.toFixed(2)}${u1}`;
                 } else {
                     const { value, unit } = this.getMeasureValue(item.mesh.name);
                     labelText = `${item.mesh.name || 'Mesh'}: ${value.toFixed(2)}${unit}`;
@@ -1425,6 +1570,83 @@ export class ModeView {
           
             return true;
         }
+    }
+
+    /**
+     * 高亮指定板卡（设置 emmisive 发光效果）
+     */
+    public highlightBoard(partId: string | null): void {
+        // 清除旧高亮
+        if (this.highlightedPartId) {
+            const oldPart = this.parts.find(p => p.id === this.highlightedPartId);
+            if (oldPart) {
+                oldPart.mesh.traverse(child => {
+                    if (child instanceof THREE.Mesh) {
+                        const mats = Array.isArray(child.material) ? child.material : [child.material];
+                        mats.forEach(mat => {
+                            if (mat instanceof THREE.MeshStandardMaterial) {
+                                mat.emissive = new THREE.Color(0x000000);
+                                mat.emissiveIntensity = 0;
+                            }
+                        });
+                    }
+                });
+            }
+        }
+
+        this.highlightedPartId = partId;
+
+        // 应用新高亮
+        if (partId) {
+            const part = this.parts.find(p => p.id === partId);
+            if (part) {
+                part.mesh.traverse(child => {
+                    if (child instanceof THREE.Mesh) {
+                        const mats = Array.isArray(child.material) ? child.material : [child.material];
+                        mats.forEach(mat => {
+                            if (mat instanceof THREE.MeshStandardMaterial) {
+                                mat.emissive = new THREE.Color(0x00ff88);
+                                mat.emissiveIntensity = 0.3;
+                            }
+                        });
+                    }
+                });
+            }
+        }
+    }
+
+    /**
+     * 获取指定板卡的传感器汇总数据 + 屏幕投影位置
+     */
+    public getPartInfoData(partId: string): PartInfoData | null {
+        const part = this.parts.find(p => p.id === partId);
+        if (!part || !this.camera || !this.renderer) return null;
+
+        const meshes = this.getPartMeshes(partId);
+        const sensors = meshes.map(item => {
+            const name = item._virtualSensorName || item.meshName;
+            const { value, unit } = this.getMeasureValue(name);
+            return { name, value: value.toFixed(2), unit };
+        });
+
+        // 计算板卡中心在屏幕上的投影位置
+        const center = new THREE.Vector3();
+        const box = new THREE.Box3().setFromObject(part.mesh);
+        box.getCenter(center);
+        center.project(this.camera);
+
+        const width = this.renderer.domElement.clientWidth;
+        const height = this.renderer.domElement.clientHeight;
+        const screenX = (center.x * 0.5 + 0.5) * width;
+        const screenY = (-center.y * 0.5 + 0.5) * height;
+
+        return {
+            partId: part.id,
+            partName: part.name,
+            sensors,
+            screenX,
+            screenY,
+        };
     }
 
     public getParts(): PartInfo[] {
