@@ -15,11 +15,11 @@ const explodedParts = ref<Set<string>>(new Set())
 
 // HDR 环境贴图选项
 const hdrOptions = [
-  { label: '工作室(小)', value: '/studio_small_01_4k.hdr' },
-  { label: '摄影棚(棕)', value: '/brown_photostudio_02_4k.hdr' },
-  { label: '海景套房', value: '/relax_inn_seaview_suite_4k.hdr' },
+  { label: '工作室(小)', value: 'hdrs/studio_small_01_4k.hdr' },
+  { label: '摄影棚(棕)', value: 'hdrs/brown_photostudio_02_4k.hdr' },
+  { label: '海景套房', value: 'hdrs/relax_inn_seaview_suite_4k.hdr' },
 ]
-const currentHdr = ref(hdrOptions[0].value)
+const currentHdr = ref(hdrOptions[0]?.value ?? '')
 const switchingHdr = ref(false)
 
 // 信息面板（板卡传感器汇总）
@@ -97,7 +97,7 @@ const initScene = () => {
 
   // 创建 ModeView 实例
   modeView = new ModeView(containerRef.value, {
-    backgroundColor: 0x0108191,
+    backgroundColor: 0x010819,
     ambientLightIntensity: 6.0,//环境光
     directionalLightIntensity: 8.5,//方向光
     enableShadows: true,
@@ -136,10 +136,10 @@ const initScene = () => {
     }
   }
 
-  // 加载模型
-  // modeView.loadModel('/computerModel.glb')
-  // modeView.loadModel('/polyModel.glb')
-  modeView.loadModel('/jixiangmodel009.glb')
+  // 加载模型（使用相对路径，兼容 file:// 协议）
+  // modeView.loadModel('computerModel.glb')
+  // modeView.loadModel('polyModel.glb')
+  modeView.loadModel('models/jixiangmodel009.glb')
 
 
 }
@@ -196,17 +196,14 @@ const switchHdr = (hdrUrl: string) => {
   currentHdr.value = hdrUrl
   switchingHdr.value = true
   modeView.switchHdrEnvironment(hdrUrl)
-  // 给 HDR 加载一点缓冲时间，然后关闭加载提示
+  // ModelView 自身在 HDR 加载完成时调用此回调
+  modeView.onHdrLoaded = () => {
+    switchingHdr.value = false
+  }
+  // 安全兜底：15s 超时保护
   setTimeout(() => {
     switchingHdr.value = false
-  }, 1500)
-}
-
-// 设置部件颜色
-const setPartColorByName = (name: string, color: number) => {
-  if (modeView) {
-    modeView.setPartColorByName(name, color)
-  }
+  }, 15000)
 }
 
 onMounted(() => {

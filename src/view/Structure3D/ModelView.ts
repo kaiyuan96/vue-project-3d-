@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -87,6 +88,7 @@ export class ModeView {
     private highlightedMeshOrigEmissive: { mat: THREE.MeshStandardMaterial; emissive: THREE.Color; intensity: number }[] = [];
     public onMeshClick: ((data: { meshName: string; mesh: THREE.Mesh; partId: string; screenX: number; screenY: number } | null) => void) | null = null;
 
+    public onHdrLoaded?: () => void;
     private onLoadingProgress?: (progress: number) => void;
     private onModelLoaded?: () => void;
     private onError?: (error: any) => void;
@@ -119,7 +121,8 @@ export class ModeView {
         lineColor: THREE.Color | null;  // 线条颜色（爆炸时应用于物体）
         randomNum: number;  // 随机数，用于标签显示
         labelSprite?: THREE.Sprite;  // 对应的文本标签 Sprite，用于实时更新
-        _virtualSensorName?: string;  // 虚拟传感器分配的名称（无关键词匹配时使用）
+        virtualSensorName?: string;  // 虚拟传感器分配的名称（无关键词匹配时使用）
+        sensorCurrentValue?: number; // 当前传感器值（用于随机游走平滑波动）
     }[] = [];
 
     public init(): void {
@@ -134,10 +137,14 @@ export class ModeView {
         this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
         this.camera.position.set(-1, 0.8, -2);//x,y,z
 
-        // Renderer
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        // Renderer — 添加兼容性选项
+        this.renderer = new THREE.WebGLRenderer({ 
+            antialias: true,
+            powerPreference: "high-performance",
+            failIfMajorPerformanceCaveat: false,
+        });
         this.renderer.setSize(width, height);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 限制像素比避免性能问题
         this.renderer.shadowMap.enabled = this.options.enableShadows!;
         this.container.appendChild(this.renderer.domElement);
 
@@ -148,7 +155,8 @@ export class ModeView {
         this.controls.autoRotate = this.autoRotate;
 
         // ========== 加载 HDR 环境贴图 ==========
-        this.currentHdrUrl = '/studio_small_01_4k.hdr';
+        // 使用相对路径（去掉前导 /），兼容 file:// 协议加载
+        this.currentHdrUrl = 'hdrs/studio_small_01_4k.hdr';
         this.loadHdrEnvironment(this.currentHdrUrl);
 
         // ========== 灯光系统 ==========
@@ -162,7 +170,7 @@ export class ModeView {
         mainLight.castShadow = true;
         mainLight.shadow.mapSize.width = 1024;
         mainLight.shadow.mapSize.height = 1024;
-        this.scene.add(mainLight);
+        // this.scene.add(mainLight);
         // 主光辅助显示
         const mainLightHelper = new THREE.PointLightHelper(mainLight, 0.5);
         this.scene.add(mainLightHelper);
@@ -170,7 +178,7 @@ export class ModeView {
         // 补光 - 冷色点光源（从左下后方补充轮廓）
         const fillLight = new THREE.PointLight(0x4488ff, 1.2, 20);
         fillLight.position.set(-4, 2, -4);
-        this.scene.add(fillLight);
+        // this.scene.add(fillLight);
         // 补光辅助显示
         const fillLightHelper = new THREE.PointLightHelper(fillLight, 0.5);
         this.scene.add(fillLightHelper);
@@ -178,21 +186,21 @@ export class ModeView {
         // 背光 - 紫色/蓝色逆光（从背后打亮轮廓）
         const backLight = new THREE.PointLight(0x8844ff, 1.0, 20);
         backLight.position.set(-2, 1, -6);
-        this.scene.add(backLight);
+        // this.scene.add(backLight);
         // 背光辅助显示
         const backLightHelper = new THREE.PointLightHelper(backLight, 0.5);
-        this.scene.add(backLightHelper);
+        // this.scene.add(backLightHelper);
 
         // 底光 - 青色（从下方打亮底部细节）
         const bottomLight = new THREE.PointLight(0x00ccff, 0.6, 20);
         bottomLight.position.set(0, -4, 0);
-        this.scene.add(bottomLight);
+        // this.scene.add(bottomLight);
         // 底光辅助显示
         const bottomLightHelper = new THREE.PointLightHelper(bottomLight, 0.5);
         this.scene.add(bottomLightHelper);
 
         // 板卡光
-        const boardLight = new THREE.PointLight(0xfcfcfc,35,20)
+        const boardLight = new THREE.PointLight(0xfcfcfc,5,20)
         boardLight.position.set(-2,0,-2)
         this.scene.add(boardLight)
        
@@ -280,8 +288,7 @@ export class ModeView {
         if (targetMeshes.length === 0) return;
 
         const intersects = this.raycaster.intersectObjects(targetMeshes, false);
-        console.log('点击',intersects)
-        if (intersects.length > 0) {
+        if (intersects.length > 0 && intersects[0]) {
             const hit = intersects[0].object as THREE.Mesh;
             if(hit.name.includes('低模') || hit.name.includes('后背小面板')){
                 // 这两个物体相当于点击空白处
@@ -406,6 +413,8 @@ export class ModeView {
                 this.scene!.background = envMap;
 
                 console.log('✅ HDR 环境贴图加载成功:', hdrUrl);
+                // HDR 加载完成回调（通知 Vue 关闭加载状态）
+                if (this.onHdrLoaded) this.onHdrLoaded();
             },
             (progress) => {
                 console.log(`HDR 加载进度: ${Math.round((progress.loaded / progress.total) * 100)}%`);
@@ -458,6 +467,12 @@ export class ModeView {
         this.loading = true;
         this.loadingProgress = 0;
         const loader = new GLTFLoader();
+        
+        // Draco 解码器配置（使用本地 wasm 文件，兼容 file:// 协议）
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath('draco/');
+        dracoLoader.setDecoderConfig({ type: 'wasm' });
+        loader.setDRACOLoader(dracoLoader);
 
         loader.load(
             url,
@@ -745,6 +760,45 @@ export class ModeView {
         }
         this.stopLabelUpdates();
         window.removeEventListener('resize', this.handleResize.bind(this));
+        
+        // 清理发散线条组的几何体和材质
+        for (const [, group] of this.partLinesGroups) {
+            group.traverse(child => {
+                if (child instanceof THREE.Line || child instanceof THREE.Mesh) {
+                    child.geometry?.dispose();
+                    if (child.material) {
+                        const mat = child.material;
+                        if (mat instanceof Array) {
+                            mat.forEach((m: THREE.Material) => m.dispose());
+                        } else {
+                            (mat as THREE.Material).dispose();
+                        }
+                    }
+                }
+                if (child instanceof THREE.Sprite) {
+                    const mat = child.material as THREE.SpriteMaterial;
+                    mat.map?.dispose();
+                    mat.dispose();
+                }
+            });
+        }
+        this.partLinesGroups.clear();
+        
+        // 清理虚线连接线
+        for (const part of this.parts) {
+            if (part.dashedLine) {
+                part.dashedLine.geometry?.dispose();
+                const mat = part.dashedLine.material;
+                if (mat && !Array.isArray(mat)) {
+                    mat.dispose();
+                }
+            }
+        }
+        
+        // 清理环境贴图纹理
+        this.currentEnvMap?.dispose();
+        this.currentHdrTexture?.dispose();
+        
         this.renderer?.dispose();
         this.scene?.clear();
         if (this.renderer && this.renderer.domElement.parentElement === this.container) {
@@ -877,19 +931,17 @@ export class ModeView {
     }
 
     /**
-     * 创建文本标签 Sprite（Canvas 纹理 + 透明度背景）
-     * 使用高分辨率 Canvas 渲染清晰文字，再通过 Sprite scale 控制显示大小
+     * 绘制文本到 Canvas（复用逻辑，避免重复代码）
      */
-    private createTextSprite(text: string, color: THREE.Color): THREE.Sprite {
-        const canvas = document.createElement('canvas');
+    private drawTextOnCanvas(canvas: HTMLCanvasElement, text: string, color: THREE.Color): void {
         canvas.width = 512;
-        canvas.height =128;
+        canvas.height = 128;
         const ctx = canvas.getContext('2d')!;
         
         // 背景（半透明暗色圆角矩形）
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         ctx.beginPath();
-        ctx.roundRect(4, 4, 248, 56, 8);
+        ctx.roundRect(4, 4, 504, 56, 8);
         ctx.fill();
         
         // 文字 — 大字号高分辨率渲染
@@ -897,7 +949,17 @@ export class ModeView {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = `rgb(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)})`;
-        ctx.fillText(text, 128, 32);
+        ctx.fillText(text, 256, 32);
+    }
+
+    /**
+     * 创建文本标签 Sprite（Canvas 纹理 + 透明度背景）
+     * 使用高分辨率 Canvas 渲染清晰文字，再通过 Sprite scale 控制显示大小
+     * 在 Sprite 上挂载 canvas 引用以便后续复用
+     */
+    private createTextSprite(text: string, color: THREE.Color): THREE.Sprite {
+        const canvas = document.createElement('canvas');
+        this.drawTextOnCanvas(canvas, text, color);
         
         const texture = new THREE.CanvasTexture(canvas);
         texture.needsUpdate = true;
@@ -909,6 +971,8 @@ export class ModeView {
             depthWrite: false,
         });
         const sprite = new THREE.Sprite(spriteMat);
+        // 在 sprite 上挂载 canvas 引用，updateTextSprite 复用
+        (sprite as any).__textCanvas = canvas;
         // 显示大小保持小巧，但纹理分辨率高所以文字清晰
         sprite.scale.set(0.5, 0.14, 1);
         return sprite;
@@ -934,18 +998,56 @@ export class ModeView {
     }
 
     /**
-     * 返回指定名称对应的模拟数值范围（用于生成更真实的标签数据）
+     * 获取传感器数值范围配置（最小值、最大值、步长比例）
      */
-    private getMeasureValue(name: string): { value: number; unit: string } {
-        if (!name) return { value: Math.random() * 100, unit: '' };
-        if (name === '网络负载') return { value: Math.random() * 990 + 10, unit: ' Mbps' };
-        if (name === '功耗') return { value: Math.random() * 99 + 1, unit: ' W' };
-        if (name === '核心温度') return { value: Math.random() * 75 + 25, unit: ' °C' };
-        if (name === '电流') return { value: Math.random() * 1.4 + 0.1, unit: ' A' };
-        if (name === '内存负载') return { value: Math.random() * 98 + 1, unit: ' %' };
-        if (name === '光功率') return { value: Math.random() * 33 - 30, unit: ' dBm' };
-        if (name === 'cpu负载') return { value: Math.random() * 98 + 1, unit: ' %' };
-        return { value: Math.random() * 100, unit: '' };
+    private getSensorRange(name: string): { min: number; max: number; step: number } {
+        if (!name) return { min: 0, max: 100, step: 0.05 };
+        if (name === '网络负载') return { min: 10, max: 1000, step: 0.03 };
+        if (name === '功耗') return { min: 1, max: 100, step: 0.04 };
+        if (name === '核心温度') return { min: 25, max: 100, step: 0.02 };
+        if (name === '电流') return { min: 0.1, max: 1.5, step: 0.03 };
+        if (name === '内存负载') return { min: 1, max: 99, step: 0.05 };
+        if (name === '光功率') return { min: -30, max: 3, step: 0.03 };
+        if (name === 'cpu负载') return { min: 1, max: 99, step: 0.05 };
+        return { min: 0, max: 100, step: 0.05 };
+    }
+
+    /**
+     * 返回指定名称对应的单位
+     */
+    private getSensorUnit(name: string): string {
+        if (!name) return '';
+        if (name === '网络负载') return ' Mbps';
+        if (name === '功耗') return ' W';
+        if (name === '核心温度') return ' °C';
+        if (name === '电流') return ' A';
+        if (name === '内存负载') return ' %';
+        if (name === '光功率') return ' dBm';
+        if (name === 'cpu负载') return ' %';
+        return '';
+    }
+
+    /**
+     * 随机游走生成传感器新值（基于上次值做微小变化，模拟真实传感器读数）
+     */
+    private randomWalkValue(item: typeof this.boardMeshList[0]): number {
+        const name = item.virtualSensorName || item.meshName;
+        const range = this.getSensorRange(name);
+        
+        if (item.sensorCurrentValue === undefined) {
+            // 首次生成：在范围内随机取一个初始值
+            item.sensorCurrentValue = Math.random() * (range.max - range.min) + range.min;
+        } else {
+            // 随机游走：在上次值基础上波动 ± 范围大小的 2%~8%
+            const fluctuation = (range.max - range.min) * range.step * (0.5 + Math.random() * 1.5);
+            const direction = Math.random() > 0.5 ? 1 : -1;
+            const delta = fluctuation * direction;
+            let newVal = item.sensorCurrentValue + delta;
+            // 限幅到范围内
+            newVal = Math.max(range.min, Math.min(range.max, newVal));
+            item.sensorCurrentValue = newVal;
+        }
+        return item.sensorCurrentValue;
     }
 
     /**
@@ -1007,14 +1109,14 @@ export class ModeView {
                     // 如果名称在当前板卡已被使用，遍历找没被用的
                     let finalName = sensorName;
                     let attempt = 0;
-                    while (usedNames.has(finalName) && attempt < this.virtualSensorNames.length * 2) {
+                    while (usedNames.has(finalName ?? '') && attempt < this.virtualSensorNames.length * 2) {
                         const ni = (nameIdx + attempt + 1) % this.virtualSensorNames.length;
-                        finalName = this.virtualSensorNames[ni];
+                        finalName = this.virtualSensorNames[ni] ?? finalName;
                         attempt++;
                     }
-                    usedNames.add(finalName);
-                    // 临时修改 meshName 为传感器名称（用于 getMeasureValue 识别）
-                    (item as any)._virtualSensorName = finalName;
+                    usedNames.add(finalName ?? 'cpu负载');
+                    // 赋值虚拟传感器名称（用于 getMeasureValue 识别）
+                    item.virtualSensorName = finalName;
                 });
                 this.virtualSensorUsedNames.set(partId, usedNames);
                 this.virtualSensorPartIds.add(partId);
@@ -1061,16 +1163,15 @@ export class ModeView {
                     }
                 }
 
-                // 获取标签文字：虚拟传感器使用分配的传感器名称
+                // 获取标签文字：使用传感器单位 + 随机游走初始值
                 let labelText: string;
-                if (isVirtual) {
-                    const sensorName = item._virtualSensorName ?? '传感器';
-                    const { value: v1, unit: u1 } = this.getMeasureValue(sensorName);
-                    labelText = `${sensorName}: ${v1.toFixed(2)}${u1}`;
-                } else {
-                    const { value, unit } = this.getMeasureValue(item.mesh.name);
-                    labelText = `${item.mesh.name || 'Mesh'}: ${value.toFixed(2)}${unit}`;
-                }
+                const sensorDisplayName = isVirtual
+                    ? (item.virtualSensorName ?? '传感器')
+                    : (item.mesh.name || 'Mesh');
+                const sensorUnit = this.getSensorUnit(sensorDisplayName);
+                // 取随机游走初值
+                const initialVal = this.randomWalkValue(item);
+                labelText = `${sensorDisplayName}: ${initialVal.toFixed(2)}${sensorUnit}`;
                 const label = this.createTextSprite(labelText, color);
                 label.position.copy(labelPos);
                 label.name = `radiate_label_${item.partId}_${localIndex}`;
@@ -1354,7 +1455,7 @@ export class ModeView {
             // 匹配包含关键字的 Mesh
             if (this.isInterestName(item.meshName)) return true;
             // 也匹配分配了虚拟传感器名称的 Mesh
-            if (item._virtualSensorName) return true;
+            if (item.virtualSensorName) return true;
             return false;
         });
     }
@@ -1403,12 +1504,12 @@ export class ModeView {
             for (const partId of this.expandedPartIds) {
                 const partItems = this.getPartMeshes(partId);
                 partItems.forEach(item => {
-                    if (!item.labelSprite) return;
-                    // 生成新的随机数值（在合理范围内模拟微小波动）
-                    // 虚拟传感器使用分配的传感器名称，否则使用原始 meshName
-                    const name = item._virtualSensorName || item.meshName;
-                    const { value, unit } = this.getMeasureValue(name);
-                    const labelText = `${name}: ${value.toFixed(2)}${unit}`;
+                if (!item.labelSprite) return;
+                    // 随机游走生成新值（在上次值基础上平滑波动）
+                    const val = this.randomWalkValue(item);
+                    const name = item.virtualSensorName || item.meshName;
+                    const unit = this.getSensorUnit(name);
+                    const labelText = `${name}: ${val.toFixed(2)}${unit}`;
                     // 更新 Sprite 纹理
                     this.updateTextSprite(item.labelSprite, labelText, item.lineColor || new THREE.Color(0xffffff));
                 });
@@ -1431,33 +1532,28 @@ export class ModeView {
      * 更新已有 Sprite 的文本内容（复用 Canvas 纹理，避免反复创建新纹理）
      */
     private updateTextSprite(sprite: THREE.Sprite, text: string, color: THREE.Color): void {
-        const canvas = document.createElement('canvas');
-        canvas.width = 512;
-        canvas.height = 128;
-        const ctx = canvas.getContext('2d')!;
-        
-        // 背景
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.beginPath();
-        ctx.roundRect(4, 4, 248, 56, 8);
-        ctx.fill();
-        
-        // 文字
-        ctx.font = 'bold 24px "Microsoft YaHei", Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = `rgb(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)})`;
-        ctx.fillText(text, 128, 32);
-        
-        // 更新纹理
-        const mat = sprite.material as THREE.SpriteMaterial;
-        if (mat.map) {
-            mat.map.dispose();
+        // 复用 sprite 上挂载的 canvas，避免每次创建新 canvas
+        const canvas = (sprite as any).__textCanvas as HTMLCanvasElement | undefined;
+        if (canvas) {
+            this.drawTextOnCanvas(canvas, text, color);
+            // 只需更新纹理数据，不需要创建新纹理
+            const mat = sprite.material as THREE.SpriteMaterial;
+            if (mat.map) {
+                mat.map.needsUpdate = true;
+            }
+        } else {
+            // 降级：没有挂载 canvas 时走旧逻辑
+            const newCanvas = document.createElement('canvas');
+            this.drawTextOnCanvas(newCanvas, text, color);
+            const mat = sprite.material as THREE.SpriteMaterial;
+            if (mat.map) {
+                mat.map.dispose();
+            }
+            const newTexture = new THREE.CanvasTexture(newCanvas);
+            newTexture.needsUpdate = true;
+            mat.map = newTexture;
+            mat.needsUpdate = true;
         }
-        const newTexture = new THREE.CanvasTexture(canvas);
-        newTexture.needsUpdate = true;
-        mat.map = newTexture;
-        mat.needsUpdate = true;
     }
 
     /**
@@ -1624,9 +1720,10 @@ export class ModeView {
 
         const meshes = this.getPartMeshes(partId);
         const sensors = meshes.map(item => {
-            const name = item._virtualSensorName || item.meshName;
-            const { value, unit } = this.getMeasureValue(name);
-            return { name, value: value.toFixed(2), unit };
+            const name = item.virtualSensorName || item.meshName;
+            const val = this.randomWalkValue(item);
+            const unit = this.getSensorUnit(name);
+            return { name, value: val.toFixed(2), unit };
         });
 
         // 计算板卡中心在屏幕上的投影位置
