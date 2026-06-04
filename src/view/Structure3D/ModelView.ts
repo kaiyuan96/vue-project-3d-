@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -467,12 +466,6 @@ export class ModeView {
         this.loading = true;
         this.loadingProgress = 0;
         const loader = new GLTFLoader();
-        
-        // Draco 解码器配置（使用本地 wasm 文件，兼容 file:// 协议）
-        const dracoLoader = new DRACOLoader();
-        dracoLoader.setDecoderPath('draco/');
-        dracoLoader.setDecoderConfig({ type: 'wasm' });
-        loader.setDRACOLoader(dracoLoader);
 
         loader.load(
             url,

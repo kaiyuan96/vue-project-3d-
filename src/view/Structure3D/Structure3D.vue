@@ -14,6 +14,7 @@ const activePartId = ref<string | null>(null)
 const explodedParts = ref<Set<string>>(new Set())
 
 // HDR 环境贴图选项
+// 注意：使用相对路径（去掉前导 /），以兼容 file:// 协议加载
 const hdrOptions = [
   { label: '工作室(小)', value: 'hdrs/studio_small_01_4k.hdr' },
   { label: '摄影棚(棕)', value: 'hdrs/brown_photostudio_02_4k.hdr' },
